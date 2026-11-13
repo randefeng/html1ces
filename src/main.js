@@ -1,6 +1,7 @@
 import './style.css';
 import { createTempleScene } from './scene.js';
 import { TempleAudio } from './audio.js';
+import { TempleConnection } from './client.js';
 import { readState, writeState, offerIncense, addWish, mergeStateChanges, dateKey, formatDuration, MAX_WISH_LENGTH, STORAGE_KEY } from './state.js';
 
 const icons = {
@@ -39,6 +40,9 @@ audio.setRain(state.rain);
 state.sound = false;
 let savedBaseline = structuredClone(state);
 let scene;
+let connection;
+let rooms = [];
+let currentRoom = 'quiet-1';
 let saveWarningShown = false;
 let toastTimer;
 let dialogReturnFocus;
@@ -51,29 +55,34 @@ let disposed = false;
 
 $('#app').innerHTML = `
   <header class="site-header">
-    <a class="brand" href="/" aria-label="山寺首页"><span class="brand-mark">${icon('mountain')}</span><span class="brand-name">山寺<span>SANSA</span></span><span class="brand-divider"></span><span class="brand-note">一隅清静，片刻自在</span></a>
-    <nav aria-label="主要导航"><button class="nav-link" data-action="journal">${icon('book')}<span>我的修行</span></button><button class="nav-link about-link" data-action="about">关于山寺<span class="tiny-dot"></span></button><button class="icon-button" data-action="settings" aria-label="偏好设置">${icon('settings')}</button></nav>
+    <a class="brand" href="/" aria-label="山寺首页"><span class="brand-mark">${icon('mountain')}</span><span class="brand-name">山寺<span>SANSA · ONLINE</span></span></a>
+    <div class="room-hud"><span class="status-dot" id="connection-dot"></span><span id="connection-status">正在入山</span><span class="room-hud-divider"></span><button data-action="rooms" id="room-button">清静一室 <span id="room-count">— / 12</span>⌄</button></div>
+    <nav aria-label="主要导航"><button class="icon-button" data-action="journal" aria-label="我的修行">${icon('book')}</button><button class="icon-button" data-action="about" aria-label="关于山寺">${icon('leaf')}</button><button class="icon-button" data-action="settings" aria-label="偏好设置">${icon('settings')}</button></nav>
   </header>
   <main>
     <section class="temple-experience" aria-label="山寺互动体验">
-      <div class="intro"><div class="eyebrow"><span></span>A LITTLE TEMPLE, A LITTLE PEACE</div><h1>万事，<br />慢慢来<span class="title-dot">。</span></h1><p>点一炷香，把纷扰留在山下。<br />在这里，什么也不做，也很好。</p><a href="#rituals" class="intro-link">此刻，让心歇一歇 ${icon('arrow')}</a></div>
-      <div class="verse"><span>山中无别事</span><span>一念自清凉</span><i>— 山寺手记</i></div>
+      <div class="world-caption"><span class="eyebrow">A SHARED SPACE FOR STILLNESS</span><h1>山中无事，心自清凉。</h1><p>不必交谈，也可以一起安静。</p></div>
+      <div class="world-view-controls" aria-label="视角选择"><button data-view="third" class="active" aria-pressed="true">第三人称</button><button data-view="first" aria-pressed="false">第一人称</button><button data-view="overview" aria-pressed="false">山寺全景</button></div>
       <div class="scene-wrap" id="scene"><div class="scene-loading" id="scene-loading"><span class="loading-ring"></span>正在寻一处山寺…</div><div class="scene-fallback" id="scene-fallback" hidden>${icon('mountain')}<h2>山寺依然在这里</h2><p>三维场景暂时无法显示，请尝试开启浏览器硬件加速或刷新。<br />你仍然可以用下方按钮上香、敲钟和许愿。</p><button class="small-button" data-action="reload">重新入山</button></div></div>
-      <aside class="daily-card"><div class="daily-heading"><span class="status-dot"></span>今日山寺<span id="local-time"></span></div><div class="daily-main"><span class="daily-symbol">${icon('incense')}</span><div><strong id="today-count">00</strong><span>炷香 · 一念善意</span></div></div><div class="daily-divider"></div><p id="daily-message">不必有所求，只愿心安。</p><span class="daily-bottom">YOUR OWN MOMENT OF PEACE</span></aside>
-      <div class="scene-meta"><span class="coordinate">37° N &nbsp; 128° E <i>想象中的山寺</i></span><span class="view-hint"><span class="drag-icon">↔</span> 拖动旋转 · 滚轮缩放 <button data-action="reset" aria-label="重置场景视角">${icon('reset')}</button></span></div>
+      <div class="daily-mini"><span id="local-time"></span><span>今日 <strong id="today-count">00</strong> 炷香</span><span id="daily-message" hidden></span></div>
+      <div class="monk-status"><span class="monk-dot"></span><span id="monk-action">自在站立</span><span class="monk-status-note">你的圆脸小沙弥</span></div>
+      <div class="mobile-stick" id="mobile-stick" aria-label="触摸摇杆：拖动控制小沙弥行走"><span id="stick-knob"></span></div>
+      <div class="scene-meta"><span class="view-hint"><kbd>W A S D</kbd> 行走 <span>·</span> 拖动看四周 <span>·</span> <kbd>V</kbd> 换视角</span><button data-action="reset" aria-label="重置场景视角">${icon('reset')}</button></div>
     </section>
     <section class="rituals-section" id="rituals" aria-label="山寺仪式">
-      <div class="section-label"><span>给自己，一点留白</span><span>SMALL RITUALS, QUIET MOMENTS</span></div>
+      <div class="section-label"><span>什么也不做，也很好。</span><span>NO CHAT. NO QUESTS. JUST BE.</span></div>
       <div class="ritual-grid">
         <button class="ritual-card incense-card" data-action="incense"><span class="ritual-icon">${icon('incense')}</span><span class="ritual-copy"><strong>点一炷香 <span class="shortcut">I</span></strong><span>一缕轻烟，一念心安</span></span><span class="ritual-arrow">${icon('arrow')}</span></button>
-        <button class="ritual-card" data-action="bell"><span class="ritual-icon">${icon('bell')}</span><span class="ritual-copy"><strong>听一声钟 <span class="shortcut">B</span></strong><span>让余音，带走心事</span></span><span class="ritual-arrow">${icon('arrow')}</span></button>
-        <button class="ritual-card" data-action="wish"><span class="ritual-icon">${icon('wish')}</span><span class="ritual-copy"><strong>留一个愿 <span class="shortcut">W</span></strong><span>把小小的愿望，交给风</span></span><span class="ritual-arrow">${icon('arrow')}</span></button>
+        <button class="ritual-card" data-action="bow"><span class="ritual-icon">${icon('lotus')}</span><span class="ritual-copy"><strong>跪拜 <span class="shortcut">1</span></strong></span></button>
+        <button class="ritual-card" data-action="fish"><span class="ritual-icon">${icon('bell')}</span><span class="ritual-copy"><strong>敲木鱼 <span class="shortcut">2</span></strong></span></button>
+        <button class="ritual-card" data-action="beads"><span class="ritual-icon">${icon('wish')}</span><span class="ritual-copy"><strong>捻念珠 <span class="shortcut">3</span></strong></span></button>
         <button class="ritual-card" data-action="meditate"><span class="ritual-icon">${icon('lotus')}</span><span class="ritual-copy"><strong>静坐片刻 <span class="shortcut">M</span></strong><span>不赶路，只和自己待一会</span></span><span class="ritual-arrow">${icon('arrow')}</span></button>
+        <button class="ritual-card" data-action="wish"><span class="ritual-icon">${icon('wish')}</span><span class="ritual-copy"><strong>留个愿</strong></span></button>
       </div>
     </section>
-    <section class="ambient-bar" aria-label="环境控制"><div class="ambient-options"><span class="ambient-label">此间光景</span><div class="segmented" aria-label="选择时段"><button data-mode="day" aria-label="白昼">${icon('sun')}<span>白昼</span></button><button data-mode="dusk" aria-label="黄昏">${icon('dusk')}<span>黄昏</span></button><button data-mode="night" aria-label="月夜">${icon('moon')}<span>月夜</span></button></div><span class="control-divider"></span><button class="ambient-toggle" id="rain-toggle" data-action="rain" aria-pressed="false">${icon('rain')}<span>山间细雨</span></button></div><div class="sound-options"><span class="sound-caption" id="sound-caption">听见山寺的声音</span><button class="sound-button" id="sound-toggle" data-action="sound" aria-pressed="false">${icon('mute')}<span>开启声音</span></button><button class="icon-button focus-button" data-action="meditate" aria-label="进入静坐模式">${icon('expand')}</button></div></section>
+    <section class="ambient-bar" aria-label="环境控制"><div class="ambient-options"><span class="ambient-label">此间光景</span><div class="segmented" aria-label="选择时段"><button data-mode="day" aria-label="白昼">${icon('sun')}<span>白昼</span></button><button data-mode="dusk" aria-label="黄昏">${icon('dusk')}<span>黄昏</span></button><button data-mode="night" aria-label="月夜">${icon('moon')}<span>月夜</span></button></div><span class="control-divider"></span><button class="ambient-toggle" id="rain-toggle" data-action="rain" aria-pressed="false">${icon('rain')}<span>山间细雨</span></button></div><div class="sound-options"><span class="sound-caption" id="sound-caption">听见山寺的声音</span><button class="chant-button" id="chant-toggle" data-action="chant" aria-pressed="false" title="使用本机中文系统语音轻读心经，非诵经录音">经文轻读</button><button class="sound-button" id="sound-toggle" data-action="sound" aria-pressed="false">${icon('mute')}<span>开启声音</span></button><button class="icon-button focus-button" data-action="meditate" aria-label="进入静坐模式">${icon('expand')}</button></div></section>
   </main>
-  <footer><span>不问结果，只享此刻。</span><span class="footer-center">${icon('leaf')} MADE FOR YOUR PEACE</span><span>原创山寺 · 慢生活实验</span></footer>
+  <footer><span>同在山中，各自心安。</span><span class="footer-center">${icon('leaf')} SHARED STILLNESS</span><span>原创多人空间 · 无聊天</span></footer>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <dialog id="panel-dialog" class="panel-dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
   <dialog id="meditation-dialog" class="meditation-dialog" aria-labelledby="meditation-title"><button class="meditation-close icon-button" data-action="end-meditation" aria-label="结束静坐">${icon('close')}</button><span class="eyebrow">A MOMENT JUST FOR YOU</span><h2 id="meditation-title">此刻，只需呼吸。</h2><p class="meditation-subtitle">没有需要完成的事，也没有需要抵达的地方。</p><div class="breathing-circle">${icon('lotus')}<span id="breath-label">准备好，慢下来</span></div><div class="meditation-timer" id="meditation-timer">03:00</div><div class="duration-options" aria-label="静坐时长"><button data-duration="3" class="active" aria-pressed="true">3 分钟</button><button data-duration="5" aria-pressed="false">5 分钟</button><button data-duration="10" aria-pressed="false">10 分钟</button></div><button class="primary-button meditation-start" data-action="toggle-meditation" id="meditation-start">开始静坐 ${icon('arrow')}</button><p class="meditation-note" id="meditation-note">跟随圆的舒展，缓缓吸气、呼气。按 Esc 可退出。</p></dialog>
@@ -126,6 +135,7 @@ const timeInterval = setInterval(updateTime, 15000);
 function incense() {
   const now = performance.now();
   if (now - lastIncense < 1400) return;
+  if (scene && !scene.playAction('incense')) { toast('这一念尚未结束。行走可以起身。'); return; }
   lastIncense = now;
   state = offerIncense(state);
   scene?.lightIncense();
@@ -203,7 +213,7 @@ function showJournal() {
 }
 
 function showSettings() {
-  showPanel('让山寺，合你的心意。', '寻一个舒服的声音，留一点自在的空间。', `<div class="settings-row"><label for="volume">环境音量</label><span id="volume-value">${Math.round(state.volume * 100)}%</span></div><input type="range" id="volume" min="0" max="100" value="${Math.round(state.volume * 100)}" aria-label="环境音量" /><button class="settings-sound small-button" data-action="sound">${icon('sound')} 开启 / 关闭声音</button><div class="settings-help"><h3>山寺小指南</h3><p>拖动场景旋转视角，滚动鼠标缩放。<br />也可以直接点击场景里的香炉、铜钟和心愿架。</p><div class="keyboard-guide"><span><kbd>I</kbd> 上香</span><span><kbd>B</kbd> 敲钟</span><span><kbd>W</kbd> 许愿</span><span><kbd>M</kbd> 静坐</span></div></div><p class="storage-note">声音需手动开启。我们不会上传你的心愿或修行记录。</p>`);
+  showPanel('让山寺，合你的心意。', '寻一个舒服的声音，留一点自在的空间。', `<div class="settings-row"><label for="volume">环境音量</label><span id="volume-value">${Math.round(state.volume * 100)}%</span></div><input type="range" id="volume" min="0" max="100" value="${Math.round(state.volume * 100)}" aria-label="环境音量" /><button class="settings-sound small-button" data-action="sound">${icon('sound')} 开启 / 关闭声音</button><div class="settings-help"><h3>山寺小指南</h3><p>WASD / 方向键行走，拖动鼠标环顾四周。<br />V 切换视角，点击地面也可以走过去。<br />1 跪拜 · 2 木鱼 · 3 念珠 · I 上香 · B 铜钟。<br />手机拖动左下方摇杆移动，拖动画面转视角。</p><div class="keyboard-guide"><span><kbd>I</kbd> 上香</span><span><kbd>B</kbd> 敲钟</span><span><kbd>V</kbd> 视角</span><span><kbd>M</kbd> 静坐</span></div></div><p class="storage-note">声音需手动开启。我们不会上传你的心愿或修行记录。</p>`);
   $('#volume').addEventListener('input', (event) => {
     state.volume = Number(event.target.value) / 100;
     audio.setVolume(state.volume);
@@ -212,7 +222,7 @@ function showSettings() {
   });
 }
 function showAbout() {
-  showPanel('一处不必赶路的地方。', '山寺 SANSA · 原创赛博上香体验', `<div class="about-body">${icon('mountain')}<p>灵感来自山寺的安静与电子上香的轻仪式。<br />这里没有排行榜，没有任务，也没有需要购买的功德。</p><p>点香，是给心一个开始。<br />敲钟，是让纷扰暂时散去。<br />静坐，是把一点时间还给自己。</p><p class="about-disclaimer">这是受 Sansatemple 氛围启发的独立创作，非原版、非官方产品，不使用原作美术与音频资源。所有场景与声音均在本地生成。</p></div>`);
+  showPanel('一处不必赶路的地方。', '山寺 SANSA · 原创赛博上香体验', `<div class="about-body">${icon('mountain')}<p>灵感来自山寺的安静与电子上香的轻仪式。<br />这里没有排行榜，没有任务，也没有需要购买的功德。</p><p>点香，是给心一个开始。<br />敲钟，是让纷扰暂时散去。<br />静坐，是把一点时间还给自己。</p><p class="about-disclaimer">这是受 Sansatemple 氛围启发的独立创作，非原版、非官方产品，不使用原作美术与音频资源。场景、圆脸小沙弥与环境音为原创程序生成，经文轻读使用本机系统语音（非诵经录音）。房间仅同步匿名角色的位置与动作。</p></div>`);
 }
 
 function openMeditation() {
@@ -295,8 +305,46 @@ async function toggleSound() {
     toast('声音暂时无法开启，请检查浏览器的音频权限后再试。');
   } finally { soundBusy = false; }
 }
+function performRitual(action) {
+  if (scene && !scene.playAction(action)) { toast('慢一点，先完成眼前这一念。移动可以起身。'); return; }
+  if (!scene) toast({ bow: '一念恭敬，愿心安定。', fish: '木鱼轻响，心事渐轻。', beads: '一颗一念，慢慢来。' }[action]);
+}
+
+const roomNames = ['清静一室', '松风二室', '听雨三室', '月照四室', '山色五室', '云归六室', '忘忧七室', '自在八室'];
+function roomName(id) { return roomNames[Number(id?.split('-')[1]) - 1] || '山寺'; }
+function updateRoomList() {
+  const list = $('#room-list');
+  if (!list) return;
+  list.replaceChildren();
+  rooms.forEach((room) => {
+    const button = document.createElement('button');
+    button.className = `room-choice ${room.id === currentRoom ? 'current' : ''}`;
+    button.disabled = room.count >= room.capacity && room.id !== currentRoom;
+    const label = document.createElement('strong');
+    label.textContent = roomName(room.id);
+    const count = document.createElement('span');
+    count.textContent = `${room.count} / ${room.capacity}${room.id === currentRoom ? ' · 此刻所在' : ''}`;
+    button.append(label, count);
+    button.addEventListener('click', () => { connection?.join(room.id); $('#panel-dialog').close(); });
+    list.append(button);
+  });
+}
+function showRooms() {
+  showPanel('换一间，继续心安。', '每室最多 12 位访客。没有聊天，只有同在一处的陪伴。', '<div id="room-list" class="room-list"></div><p class="storage-note">邀请朋友打开同一个网址，并选择同一间山室，就能看见彼此。</p>');
+  updateRoomList();
+  connection?.requestRooms();
+}
+
 const actions = {
-  incense, bell, wish: showWish, journal: showJournal, settings: showSettings, about: showAbout,
+  incense, bell, bow: () => performRitual('bow'), fish: () => performRitual('fish'), beads: () => performRitual('beads'),
+  rooms: showRooms,
+  chant: async () => {
+    if (audio.chantEnabled) { audio.stopChant(); return; }
+    try { await audio.startChant(); toast('本机系统语音轻读心经，非诵经录音。'); }
+    catch (error) { toast(error.message); }
+  },
+  view: () => scene?.cycleView(),
+  wish: showWish, journal: showJournal, settings: showSettings, about: showAbout,
   meditate: openMeditation,
   'toggle-meditation': toggleMeditation,
   'end-meditation': () => $('#meditation-dialog').close(),
@@ -316,6 +364,8 @@ const actions = {
 document.addEventListener('click', (event) => {
   const action = event.target.closest('[data-action]')?.dataset.action;
   if (action) actions[action]?.();
+  const view = event.target.closest('[data-view]')?.dataset.view;
+  if (view) scene?.setView(view);
   const mode = event.target.closest('[data-mode]')?.dataset.mode;
   if (mode) {
     state.mode = mode;
@@ -335,7 +385,7 @@ document.addEventListener('click', (event) => {
 });
 document.addEventListener('keydown', (event) => {
   if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || document.querySelector('dialog[open]') || event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
-  const action = { i: incense, b: bell, w: showWish, m: openMeditation }[event.key.toLowerCase()];
+  const action = { i: incense, b: bell, '1': actions.bow, '2': actions.fish, '3': actions.beads, v: actions.view, m: openMeditation }[event.key.toLowerCase()];
   if (action) { event.preventDefault(); action(); }
 });
 $('#panel-dialog').addEventListener('click', (event) => {
@@ -376,9 +426,74 @@ try {
     onInteract: (action) => actions[action]?.(),
     onReady: () => { $('#scene-loading').hidden = true; },
     onError: handleSceneError,
+    onPose: (pose) => connection?.setPose(pose),
+    onActionChange: (action, label) => { $('#monk-action').textContent = label; connection?.action(action); },
+    onPulse: (action) => { if (action === 'fish') audio.woodenFish(); },
+    onViewChange: (view) => {
+      document.querySelectorAll('[data-view]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.view === view);
+        button.setAttribute('aria-pressed', String(button.dataset.view === view));
+      });
+    },
   });
   scene?.setAtmosphere(state.mode, state.rain);
 } catch (error) { handleSceneError(error); }
+
+connection = new TempleConnection({
+  onStatus(status) {
+    $('#connection-status').textContent = { connecting: '正在入山', online: '同在山中', offline: '离线漫步 · 重连中' }[status];
+    $('#connection-dot').dataset.status = status;
+    $('#room-button').disabled = status !== 'online';
+    document.body.dataset.connection = status;
+  },
+  onWelcome(data) {
+    currentRoom = data.room;
+    $('#room-button').innerHTML = `${roomName(data.room)} <span id="room-count">${data.players.length} / ${data.capacity}</span>⌄`;
+    scene?.setPlayers(data.players, data.id, true);
+    $('#monk-action').textContent = '自在站立';
+    updateRoomList();
+  },
+  onPlayers(players, id) {
+    scene?.setPlayers(players, id);
+    const count = $('#room-count');
+    if (count) count.textContent = `${id ? players.length : '—'} / 12`;
+  },
+  onRooms(list) { rooms = list; updateRoomList(); },
+  onError(message) { toast(message); },
+});
+
+const stick = $('#mobile-stick');
+let stickPointer = null;
+function moveStick(event) {
+  if (event.pointerId !== stickPointer) return;
+  const rect = stick.getBoundingClientRect();
+  let x = (event.clientX - rect.left - rect.width / 2) / 33;
+  let y = (event.clientY - rect.top - rect.height / 2) / 33;
+  const length = Math.hypot(x, y);
+  if (length > 1) { x /= length; y /= length; }
+  $('#stick-knob').style.transform = `translate(${x * 28}px, ${y * 28}px)`;
+  scene?.setVirtualStick(x, y);
+}
+stick.addEventListener('pointerdown', (event) => {
+  if (stickPointer !== null) return;
+  stickPointer = event.pointerId;
+  stick.setPointerCapture(event.pointerId);
+  moveStick(event);
+});
+stick.addEventListener('pointermove', moveStick);
+function resetStick(event) {
+  if (event.pointerId !== stickPointer) return;
+  stickPointer = null;
+  $('#stick-knob').style.transform = '';
+  scene?.setVirtualStick(0, 0);
+}
+stick.addEventListener('pointerup', resetStick);
+stick.addEventListener('pointercancel', resetStick);
+
+audio.onChantState = (enabled) => {
+  $('#chant-toggle').setAttribute('aria-pressed', String(enabled));
+  $('#chant-toggle').textContent = enabled ? '停止轻读' : '经文轻读';
+};
 
 function dispose() {
   if (disposed) return;
@@ -388,6 +503,7 @@ function dispose() {
   clearTimeout(toastTimer);
   window.removeEventListener('storage', syncStoredState);
   window.removeEventListener('focus', syncStoredState);
+  connection?.dispose();
   scene?.dispose();
   audio.dispose();
 }

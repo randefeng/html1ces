@@ -16,7 +16,7 @@ test('desktop scene and all primary rituals work and persist', async ({ page }) 
   await page.screenshot({ path: 'test-results/desktop.png', fullPage: true });
   await page.locator('[data-action="incense"]').click();
   await expect(page.locator('#today-count')).toHaveText('01');
-  await page.locator('[data-action="bell"]').click();
+  await page.keyboard.press('b');
   expect((await getStored(page)).bells).toBe(1);
   await page.locator('[data-action="wish"]').click();
   const wish = '愿家人健康 <img src=x onerror=alert(1)>';
